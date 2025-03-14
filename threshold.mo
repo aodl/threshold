@@ -120,6 +120,12 @@ actor class (signers : [Principal]) = threshold {
   };
 
   type Proposal = { id : Id; memo : Text; state : State; payload : Payload };
+  type ProposalSummary = {
+    id : Id;
+    memo : Text;
+    state : State;
+    payload : (Principal, Text); // omit the payload blob (which can be very large)
+  };
   // authorised principals can retrieve proposals (in reverse creation order)
   // `newest` (when given) specifies the newest proposal the caller is interested in
   // `count` (when given) specifies the number of proposals returned (defaults to 10)
@@ -146,6 +152,46 @@ actor class (signers : [Principal]) = threshold {
       allProposals,
     );
   };
+  // similar to getProposals (above), but omits the payload blob from each proposal
+  public shared ({ caller }) func getProposalSummaries({
+    newest : ?Id;
+    count : ?Nat;
+  }) : async [ProposalSummary] {
+    let defaultCount = 10;
+    authorise caller;
+    let allProposals = Array_tabulate<Proposal>(
+      proposals.size(),
+      func i = { proposals[i] with state = proposals[i].state }
+    );
+    var go : Int = switch count {
+      case (?c) c;
+      case null defaultCount;
+    };
+    let filtered = filter<Proposal>(
+      func proposal {
+        go -= 1;
+        switch newest {
+          case (?newestVal) proposal.id <= newestVal and go >= 0;
+          case null go >= 0;
+        };
+      },
+      allProposals
+    );
+    // Convert full proposals to their "summary" form
+    Array_tabulate<ProposalSummary>(
+      filtered.size(),
+      func i {
+        let p = filtered[i];
+        let (target, method, _) = p.payload;
+        {
+          id = p.id;
+          memo = p.memo;
+          state = p.state;
+          payload = (target, method);
+        };
+      }
+    );
+  };
 
   public shared ({ caller }) func getProposal(id : Id) : async ?Proposal {
     for (prop in proposals.vals()) {
@@ -155,6 +201,45 @@ actor class (signers : [Principal]) = threshold {
       };
     };
     null;
+  };
+  
+  public shared ({ caller }) func getProposalPayload(id : Id) : async ?Blob {
+    for (prop in proposals.vals()) {
+      if (prop.id == id) {
+        authoriseAccording(caller, prop.signers);
+        let (_, _, data) = prop.payload;
+        return ?data;
+      };
+    };
+    return null;
+  };
+
+  // returns WASM blob if this is a canister upgrade proposal id, else error
+  public shared ({ caller }) func getUpgradeWasmBlob(id : Id) : async ?Blob {
+    for (prop in proposals.vals()) {
+      if (prop.id == id) {
+        authoriseAccording(caller, prop.signers);
+        switch (isUpgrade(prop.payload)) {
+          case (?params) { return ?params.wasm_module };
+          case null { trapWith "Not a canister upgrade proposal" };
+        };
+      };
+    };
+    return null;
+  };
+
+  // returns arg blob if this is a canister upgrade proposal id, else error
+  public shared ({ caller }) func getUpgradeArgBlob(id : Id) : async ?Blob {
+    for (prop in proposals.vals()) {
+      if (prop.id == id) {
+        authoriseAccording(caller, prop.signers);
+        switch (isUpgrade(prop.payload)) {
+          case (?params) { return ?params.arg };
+          case null { trapWith "Not a canister upgrade proposal" };
+        };
+      };
+    };
+    return null;
   };
 
   // traps when `principal` is not in the given `according` principals list
@@ -212,6 +297,17 @@ actor class (signers : [Principal]) = threshold {
     canister_id : Principal;
     wasm_module : Blob;
     arg : Blob;
+  };
+
+  func isUpgrade((addressee, method, args) : Payload) : ?InstallParams {
+    if (addressee == principalOfActor(actor "aaaaa-aa") and method == "install_code") {
+      do ? {
+        let params : InstallParams = (from_candid (args) : ?InstallParams)!;
+        params;
+      };
+    } else {
+      null;
+    };
   };
 
   func isSelfUpgrade((addressee, method, args) : Payload) : ?InstallParams {
