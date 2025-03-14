@@ -12,18 +12,6 @@
       "packtool": ""
     }
   },
-  "dfx": "0.14.2",
-  "networks": {
-    "local": {
-      "bind": "127.0.0.1:4943",
-      "type": "ephemeral"
-    },
-    "testnet": {
-      "providers": [
-        "https://nnsdapp.dfinity.network"
-      ],
-      "type": "persistent"
-    }
-  },
+  "dfx": "0.25.0",
   "version": 1
 }
